@@ -132,7 +132,7 @@ class SimpleMaterial(Material):
     def compute_stress(self, dstrain):
         return dstrain * self.properties["E"]
 
-
+#commenting to create bingham model
 if __name__ == "__main__":
     from diffmpm.utils import _show_example
 
