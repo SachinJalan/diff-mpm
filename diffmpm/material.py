@@ -155,7 +155,7 @@ class Bingham(Material):
         critical_shear_rate = material_properties["critical_shear_rate"]
         bulk_modulus = youngs_modulus / (3.0 * (1.0 - 2.0 * poisson_ratio))
         compressibility_multiplier_ = 1.0
-        if material_properties.has_key("incompressible"):
+        if "incompressible" in material_properties.keys():
             incompressible = material_properties["incompressible"]
             if incompressible:
                 compressibility_multiplier_ = 0.0
