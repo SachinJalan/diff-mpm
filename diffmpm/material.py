@@ -197,7 +197,7 @@ class Bingham(Material):
 
     # Compute the pressure
     def thermodynamic_pressure(self, volumetric_strain):
-        return -self.bulk_modulus * volumetric_strain
+        return -self.properties["bulk_modulus"] * volumetric_strain
 
     # Compute the stress
     def compute_stress(self, dstrain, particle, state_vars):
@@ -208,12 +208,12 @@ class Bingham(Material):
         elif self.ndim == 2:
             dirac_delta = dirac_delta.at[0:2, 0].set(1.0)
 
-        def compute_stress_per_particle(particle_strain_rate):
-            strain_rate = particle_strain_rate
+        def compute_stress_per_particle(i):
+            strain_rate = particle.strain_rate[i]
             strain_rate = strain_rate.at[-3:].set(strain_rate[-3:] * 0.5)
             shear_rate_threshold = 1e-15
-            if self.critical_shear_rate < shear_rate_threshold:
-                self.critical_shear_rate = shear_rate_threshold
+            if self.properties["critical_shear_rate"] < shear_rate_threshold:
+                self.properties["critical_shear_rate"] = shear_rate_threshold
             shear_rate = jnp.sqrt(
                 2.0
                 * (
@@ -223,29 +223,30 @@ class Bingham(Material):
             )
             apparent_viscosity = 0.0
             if (shear_rate[0, 0] * shear_rate[0, 0]) > (
-                self.critical_shear_rate * self.critical_shear_rate
+                self.properties["critical_shear_rate"]
+                * self.properties["critical_shear_rate"]
             ):
-                apparent_viscosity = 2.0 * ((self.tau0 / shear_rate[0, 0]) + self.mu_)
+                apparent_viscosity = 2.0 * (
+                    (self.properties["tau0"] / shear_rate[0, 0]) + self.properties["mu"]
+                )
             tau = apparent_viscosity * strain_rate
             trace_invariant2 = 0.5 * jnp.dot(tau[:3, 0], tau[:3, 0])
-            if trace_invariant2 < (self.tau0 * self.tau0):
+            if trace_invariant2 < (self.properties["tau0"] * self.properties["tau0"]):
                 tau = tau.at[:].set(0)
-            state_vars[
-                "pressure"
-            ] += self.compressibility_multiplier_ * self.thermodynamic_pressure(
-                particle.dvolumetric_strain
-            )
+            state_vars["pressure"] += self.properties[
+                "compressibility_multiplier"
+            ] * self.thermodynamic_pressure(particle.dvolumetric_strain)
             updated_stress = (
                 -(state_vars["pressure"])
                 * dirac_delta
-                * self.compressibility_multiplier_
+                * self.properties["compressibility_multiplier"]
                 + tau
             )
             return updated_stress
 
-        updated_stress = vmap(compute_stress_per_particle, in_axes=(0))(
-            particle.strain_rate
-        )
+        updated_stress = jnp.zeros((particle.strain_rate.shape))
+        for i in range(particle.strain_rate.shape[0]):
+            updated_stress = updated_stress.at[i].set(compute_stress_per_particle(i))
 
         return updated_stress
 
