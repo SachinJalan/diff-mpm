@@ -134,7 +134,6 @@ class SimpleMaterial(Material):
         return dstrain * self.properties["E"]
 
 
-# commenting to create bingham model
 @register_pytree_node_class
 class Bingham(Material):
     _props = (
@@ -148,6 +147,19 @@ class Bingham(Material):
 
     # Passing ndim as an extra parameter for the material to work for both 1D and 2D case
     def __init__(self, material_properties, ndim):
+        """
+        Create a Bingham material model.
+
+        Arguments
+        ---------
+        material_properties: dict
+            Dictionary with material properties. For Bingham
+        material, 'density','youngs_modulus','poisson_ratio','tau0','mu'
+        and 'critical_shear_rate' are required keys.
+
+        ndim: int
+            Dimension of the problem supports 1D and 2D
+        """
         self.validate_props(material_properties)
         self.ndim = ndim
         density = material_properties["density"]
@@ -156,8 +168,10 @@ class Bingham(Material):
         tau0 = material_properties["tau0"]
         mu_ = material_properties["mu"]
         critical_shear_rate = material_properties["critical_shear_rate"]
+        # Calculate the bulk modulus
         bulk_modulus = youngs_modulus / (3.0 * (1.0 - 2.0 * poisson_ratio))
         compressibility_multiplier_ = 1.0
+        # Special Material Properties
         if "incompressible" in material_properties.keys():
             incompressible = material_properties["incompressible"]
             if incompressible:
@@ -171,17 +185,21 @@ class Bingham(Material):
     def __repr__(self):
         return f"Bingham(props={self.properties})"
 
+    # Initialise State Variables
     def initialise_state_variables():
         state_vars = {}
         state_vars["pressure"] = 0.0
         return state_vars
 
+    # State Variables
     def state_variables():
         return ["pressure"]
 
+    # Compute the pressure
     def thermodynamic_pressure(self, volumetric_strain):
         return -self.bulk_modulus * volumetric_strain
 
+    # Compute the stress
     def compute_stress(self, dstrain, particle, state_vars):
         shear_rate_threshold = 1e-15
         dirac_delta = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape((6, 1))
