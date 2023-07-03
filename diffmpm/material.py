@@ -142,19 +142,19 @@ class Bingham(Material):
         "youngs_modulus",
         "poisson_ratio",
         "tau0",
-        "mu_",
+        "mu",
         "critical_shear_rate",
     )
 
     # Passing ndim as an extra parameter for the material to work for both 1D and 2D case
     def __init__(self, material_properties, ndim):
         self.validate_props(material_properties)
-        density = material_properties["density"]
         self.ndim = ndim
+        density = material_properties["density"]
         youngs_modulus = material_properties["youngs_modulus"]
         poisson_ratio = material_properties["poisson_ratio"]
         tau0 = material_properties["tau0"]
-        mu_ = material_properties["mu_"]
+        mu_ = material_properties["mu"]
         critical_shear_rate = material_properties["critical_shear_rate"]
         bulk_modulus = youngs_modulus / (3.0 * (1.0 - 2.0 * poisson_ratio))
         compressibility_multiplier_ = 1.0
@@ -180,7 +180,7 @@ class Bingham(Material):
         return ["pressure"]
 
     def thermodynamic_pressure(self, volumetric_strain):
-        return -self.properties["bulk_modulus"] * volumetric_strain
+        return -self.bulk_modulus * volumetric_strain
 
     def compute_stress(self, dstrain, particle, state_vars):
         shear_rate_threshold = 1e-15
@@ -193,21 +193,23 @@ class Bingham(Material):
         def compute_stress_per_particle(particle_strain_rate):
             strain_rate = particle_strain_rate
             strain_rate = strain_rate.at[-3:].set(strain_rate[-3:] * 0.5)
-            strain_rate_threshold = 1e-15
+            shear_rate_threshold = 1e-15
             if self.critical_shear_rate < shear_rate_threshold:
                 self.critical_shear_rate = shear_rate_threshold
             shear_rate = jnp.sqrt(
                 2.0
                 * (
                     strain_rate.T @ (strain_rate)
-                    + strain_rate[-3].T @ strain_rate[-3, jnp.newaxis]
+                    + strain_rate[-3:].T @ strain_rate[-3:]
                 )
             )
             apparent_viscosity = 0.0
-            if shear_rate[0, 0] * shear_rate[0, 0] > self.critical_shear_rate:
-                apparent_viscosity = 2.0 * ((self.tau0 / shear_rate[0, 0]))
+            if (shear_rate[0, 0] * shear_rate[0, 0]) > (
+                self.critical_shear_rate * self.critical_shear_rate
+            ):
+                apparent_viscosity = 2.0 * ((self.tau0 / shear_rate[0, 0]) + self.mu_)
             tau = apparent_viscosity * strain_rate
-            trace_invariant2 = 0.5 * jnp.dot(tau[:, 0], tau[:, 0])
+            trace_invariant2 = 0.5 * jnp.dot(tau[:3, 0], tau[:3, 0])
             if trace_invariant2 < (self.tau0 * self.tau0):
                 tau = tau.at[:].set(0)
             state_vars[
@@ -222,8 +224,10 @@ class Bingham(Material):
                 + tau
             )
             return updated_stress
-        
-        updated_stress=vmap(compute_stress_per_particle,in_axes=(0))(particle.strain_rate)
+
+        updated_stress = vmap(compute_stress_per_particle, in_axes=(0))(
+            particle.strain_rate
+        )
 
         return updated_stress
 
