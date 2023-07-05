@@ -209,7 +209,7 @@ class Bingham(Material):
             dirac_delta = dirac_delta.at[0:2, 0].set(1.0)
         if self.properties["critical_shear_rate"] < shear_rate_threshold:
             self.properties["critical_shear_rate"] = shear_rate_threshold
-        
+
         def compute_stress_per_particle(
             particle_strain_rate,
             self,
@@ -247,9 +247,11 @@ class Bingham(Material):
                 * self.properties["compressibility_multiplier"]
                 + tau
             )
-            return updated_stress_per_particle,state_vars_pressure
+            return updated_stress_per_particle, state_vars_pressure
 
-        updated_stress,state_vars["pressure"] = jit(vmap(compute_stress_per_particle, in_axes=(0, None, 0, 0,None)))(
+        updated_stress, state_vars["pressure"] = jit(
+            vmap(compute_stress_per_particle, in_axes=(0, None, 0, 0, None))
+        )(
             particles.strain_rate,
             self,
             state_vars["pressure"],
