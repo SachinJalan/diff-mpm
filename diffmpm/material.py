@@ -1,7 +1,7 @@
 from jax.tree_util import register_pytree_node_class
 import abc
 import jax.numpy as jnp
-from jax import vmap
+from jax import vmap, lax, jit
 
 
 class Material(abc.ABC):
@@ -172,7 +172,7 @@ class Bingham(Material):
         bulk_modulus = youngs_modulus / (3.0 * (1.0 - 2.0 * poisson_ratio))
         compressibility_multiplier_ = 1.0
         # Special Material Properties
-        if "incompressible" in material_properties.keys():
+        if "incompressible" in material_properties:
             incompressible = material_properties["incompressible"]
             if incompressible:
                 compressibility_multiplier_ = 0.0
@@ -186,9 +186,9 @@ class Bingham(Material):
         return f"Bingham(props={self.properties})"
 
     # Initialise State Variables
-    def initialise_state_variables():
+    def initialise_state_variables(particles):
         state_vars = {}
-        state_vars["pressure"] = 0.0
+        state_vars["pressure"] = jnp.zeros((particles.loc.shape[0]))
         return state_vars
 
     # State Variables
@@ -200,53 +200,62 @@ class Bingham(Material):
         return -self.properties["bulk_modulus"] * volumetric_strain
 
     # Compute the stress
-    def compute_stress(self, dstrain, particle, state_vars):
+    def compute_stress(self, dstrain, particles, state_vars):
         shear_rate_threshold = 1e-15
         dirac_delta = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape((6, 1))
         if self.ndim == 1:
             dirac_delta = dirac_delta.at[0, 0].set(1.0)
         elif self.ndim == 2:
             dirac_delta = dirac_delta.at[0:2, 0].set(1.0)
-
-        def compute_stress_per_particle(i):
-            strain_rate = particle.strain_rate[i]
-            strain_rate = strain_rate.at[-3:].set(strain_rate[-3:] * 0.5)
-            shear_rate_threshold = 1e-15
-            if self.properties["critical_shear_rate"] < shear_rate_threshold:
-                self.properties["critical_shear_rate"] = shear_rate_threshold
+        if self.properties["critical_shear_rate"] < shear_rate_threshold:
+            self.properties["critical_shear_rate"] = shear_rate_threshold
+        
+        def compute_stress_per_particle(
+            particle_strain_rate,
+            self,
+            state_vars_pressure,
+            dvolumetric_strain_per_particle,
+            dirac_delta,
+        ):
+            strain_r = particle_strain_rate
+            strain_r = strain_r.at[-3:].multiply(0.5)
             shear_rate = jnp.sqrt(
-                2.0
-                * (
-                    strain_rate.T @ (strain_rate)
-                    + strain_rate[-3:].T @ strain_rate[-3:]
-                )
+                2.0 * (strain_r.T @ (strain_r) + strain_r[-3:].T @ strain_r[-3:])
             )
-            apparent_viscosity = 0.0
-            if (shear_rate[0, 0] * shear_rate[0, 0]) > (
+            apparent_velocity_true = 2.0 * (
+                (self.properties["tau0"] / shear_rate[0, 0]) + self.properties["mu"]
+            )
+            condition = (shear_rate[0, 0] * shear_rate[0, 0]) > (
                 self.properties["critical_shear_rate"]
                 * self.properties["critical_shear_rate"]
-            ):
-                apparent_viscosity = 2.0 * (
-                    (self.properties["tau0"] / shear_rate[0, 0]) + self.properties["mu"]
-                )
-            tau = apparent_viscosity * strain_rate
+            )
+            apparent_viscosity = lax.select(condition, apparent_velocity_true, 0.0)
+            tau = apparent_viscosity * strain_r
             trace_invariant2 = 0.5 * jnp.dot(tau[:3, 0], tau[:3, 0])
-            if trace_invariant2 < (self.properties["tau0"] * self.properties["tau0"]):
-                tau = tau.at[:].set(0)
-            state_vars["pressure"] += self.properties[
+            lax.cond(
+                trace_invariant2 < (self.properties["tau0"] * self.properties["tau0"]),
+                lambda x: x.at[:].set(0),
+                lambda x: x,
+                tau,
+            )
+            state_vars_pressure += self.properties[
                 "compressibility_multiplier"
-            ] * self.thermodynamic_pressure(particle.dvolumetric_strain)
-            updated_stress = (
-                -(state_vars["pressure"])
+            ] * self.thermodynamic_pressure(dvolumetric_strain_per_particle)
+            updated_stress_per_particle = (
+                -(state_vars_pressure)
                 * dirac_delta
                 * self.properties["compressibility_multiplier"]
                 + tau
             )
-            return updated_stress
+            return updated_stress_per_particle,state_vars_pressure
 
-        updated_stress = jnp.zeros((particle.strain_rate.shape))
-        for i in range(particle.strain_rate.shape[0]):
-            updated_stress = updated_stress.at[i].set(compute_stress_per_particle(i))
+        updated_stress,state_vars["pressure"] = jit(vmap(compute_stress_per_particle, in_axes=(0, None, 0, 0,None)))(
+            particles.strain_rate,
+            self,
+            state_vars["pressure"],
+            particles.dvolumetric_strain,
+            dirac_delta,
+        )
 
         return updated_stress
 
