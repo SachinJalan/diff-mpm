@@ -143,10 +143,10 @@ class Bingham(Material):
         "tau0",
         "mu",
         "critical_shear_rate",
+        "ndim",
     )
 
-    # Passing ndim as an extra parameter for the material to work for both 1D and 2D case
-    def __init__(self, material_properties, ndim):
+    def __init__(self, material_properties):
         """
         Create a Bingham material model.
 
@@ -161,7 +161,7 @@ class Bingham(Material):
             Dimension of the problem supports 1D and 2D
         """
         self.validate_props(material_properties)
-        self.ndim = ndim
+        self.ndim = material_properties["ndim"]
         density = material_properties["density"]
         youngs_modulus = material_properties["youngs_modulus"]
         poisson_ratio = material_properties["poisson_ratio"]
@@ -185,7 +185,7 @@ class Bingham(Material):
     def __repr__(self):
         return f"Bingham(props={self.properties})"
 
-    # Initialise State Variables
+    # Initialise history variables
     def initialise_state_variables(particles):
         state_vars = {}
         state_vars["pressure"] = jnp.zeros((particles.loc.shape[0]))
@@ -203,12 +203,17 @@ class Bingham(Material):
     def compute_stress(self, dstrain, particles, state_vars):
         shear_rate_threshold = 1e-15
         dirac_delta = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape((6, 1))
-        if self.ndim == 1:
-            dirac_delta = dirac_delta.at[0, 0].set(1.0)
-        elif self.ndim == 2:
-            dirac_delta = dirac_delta.at[0:2, 0].set(1.0)
-        if self.properties["critical_shear_rate"] < shear_rate_threshold:
-            self.properties["critical_shear_rate"] = shear_rate_threshold
+        lax.cond(
+            self.ndim == 1,
+            lambda x: x.at[0, 0].set(1.0),
+            lambda x: x.at[0:2, 0].set(1.0),
+            dirac_delta,
+        )
+        lax.select(
+            self.properties["critical_shear_rate"] < shear_rate_threshold,
+            shear_rate_threshold,
+            self.properties["critical_shear_rate"],
+        )
 
         def compute_stress_per_particle(
             particle_strain_rate,
