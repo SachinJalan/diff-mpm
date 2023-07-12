@@ -203,18 +203,18 @@ class Bingham(Material):
     def compute_stress(self, dstrain, particles, state_vars):
         shear_rate_threshold = 1e-15
         dirac_delta = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape((6, 1))
-        lax.cond(
+        dirac_delta=lax.cond(
             self.ndim == 1,
             lambda x: x.at[0, 0].set(1.0),
             lambda x: x.at[0:2, 0].set(1.0),
             dirac_delta,
         )
-        lax.select(
+        self.properties["critical_shear_rate"] = lax.select(
             self.properties["critical_shear_rate"] < shear_rate_threshold,
             shear_rate_threshold,
             self.properties["critical_shear_rate"],
         )
-
+        @jit
         def compute_stress_per_particle(
             particle_strain_rate,
             self,
@@ -227,17 +227,17 @@ class Bingham(Material):
             shear_rate = jnp.sqrt(
                 2.0 * (strain_r.T @ (strain_r) + strain_r[-3:].T @ strain_r[-3:])
             )
-            apparent_velocity_true = 2.0 * (
+            apparent_viscosity_true = 2.0 * (
                 (self.properties["tau0"] / shear_rate[0, 0]) + self.properties["mu"]
             )
             condition = (shear_rate[0, 0] * shear_rate[0, 0]) > (
                 self.properties["critical_shear_rate"]
                 * self.properties["critical_shear_rate"]
             )
-            apparent_viscosity = lax.select(condition, apparent_velocity_true, 0.0)
+            apparent_viscosity = lax.select(condition, apparent_viscosity_true, 0.0)
             tau = apparent_viscosity * strain_r
             trace_invariant2 = 0.5 * jnp.dot(tau[:3, 0], tau[:3, 0])
-            lax.cond(
+            tau=lax.cond(
                 trace_invariant2 < (self.properties["tau0"] * self.properties["tau0"]),
                 lambda x: x.at[:].set(0),
                 lambda x: x,
@@ -254,8 +254,8 @@ class Bingham(Material):
             )
             return updated_stress_per_particle, state_vars_pressure
 
-        updated_stress, state_vars["pressure"] = jit(
-            vmap(compute_stress_per_particle, in_axes=(0, None, 0, 0, None))
+        updated_stress, state_vars["pressure"] = vmap(
+            compute_stress_per_particle, in_axes=(0, None, 0, 0, None)
         )(
             particles.strain_rate,
             self,
