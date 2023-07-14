@@ -202,18 +202,21 @@ class Bingham(Material):
     # Compute the stress
     def compute_stress(self, dstrain, particles, state_vars):
         shear_rate_threshold = 1e-15
+        # dirac delta in Voigt notation
         dirac_delta = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).reshape((6, 1))
-        dirac_delta=lax.cond(
+        dirac_delta = lax.cond(
             self.ndim == 1,
             lambda x: x.at[0, 0].set(1.0),
             lambda x: x.at[0:2, 0].set(1.0),
             dirac_delta,
         )
+        # Set threshold for minimum critical shear rate
         self.properties["critical_shear_rate"] = lax.select(
             self.properties["critical_shear_rate"] < shear_rate_threshold,
             shear_rate_threshold,
             self.properties["critical_shear_rate"],
         )
+
         @jit
         def compute_stress_per_particle(
             particle_strain_rate,
@@ -223,10 +226,23 @@ class Bingham(Material):
             dirac_delta,
         ):
             strain_r = particle_strain_rate
+            # Convert strain rate to rate of deformation tensor
             strain_r = strain_r.at[-3:].multiply(0.5)
+            """
+            Rate of shear = sqrt(2 * D_ij * D_ij)
+            Since D (D_ij) is in Voigt notation (D_i), and the definition above is in
+            matrix, the last 3 components have to be doubled D_ij * D_ij = D_0^2 +
+            D_1^2 + D_2^2 + 2*D_3^2 + 2*D_4^2 + 2*D_5^2 Yielding is defined: rate of
+            shear > critical_shear_rate_^2 Checking yielding from strain rate vs
+            critical yielding shear rate
+            """
             shear_rate = jnp.sqrt(
                 2.0 * (strain_r.T @ (strain_r) + strain_r[-3:].T @ strain_r[-3:])
             )
+            """
+            Apparent_viscosity maps shear rate to shear stress
+            Check if shear rate is 0
+            """
             apparent_viscosity_true = 2.0 * (
                 (self.properties["tau0"] / shear_rate[0, 0]) + self.properties["mu"]
             )
@@ -235,17 +251,34 @@ class Bingham(Material):
                 * self.properties["critical_shear_rate"]
             )
             apparent_viscosity = lax.select(condition, apparent_viscosity_true, 0.0)
+            """
+            Compute shear change to volumetric
+            tau deviatoric part of cauchy stress tensor
+            """
             tau = apparent_viscosity * strain_r
-            trace_invariant2 = 0.5 * jnp.dot(tau[:3, 0], tau[:3, 0])
-            tau=lax.cond(
-                trace_invariant2 < (self.properties["tau0"] * self.properties["tau0"]),
+            """
+            von Mises criterion
+            trace of second invariant J2 of deviatoric stress in matrix form
+            Since tau is in Voigt notation, only the first three numbers matter
+            yield condition trace of the invariant > tau0^2
+            """
+            trace_invariant = 0.5 * jnp.dot(tau[:3, 0], tau[:3, 0])
+            tau = lax.cond(
+                trace_invariant < (self.properties["tau0"] * self.properties["tau0"]),
                 lambda x: x.at[:].set(0),
                 lambda x: x,
                 tau,
             )
+            # update pressure
             state_vars_pressure += self.properties[
                 "compressibility_multiplier"
             ] * self.thermodynamic_pressure(dvolumetric_strain_per_particle)
+            """
+            Update volumetric and deviatoric stress
+            thermodynamic pressure is from material point
+            stress = -thermodynamic_pressure I + tau, where I is identity matrix or
+            direc_delta in Voigt notation
+            """
             updated_stress_per_particle = (
                 -(state_vars_pressure)
                 * dirac_delta
