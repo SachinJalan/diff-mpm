@@ -251,15 +251,15 @@ class Bingham(Material):
 
             shear_rate = jnp.sqrt(
                 2.0 * (strain_r.T @ (strain_r) + strain_r[-3:].T @ strain_r[-3:])
-            )
+            ).squeeze()
 
             # Apparent_viscosity maps shear rate to shear stress
             # Check if shear rate is 0
 
             apparent_viscosity_true = 2.0 * (
-                (self.properties["tau0"] / shear_rate[0, 0]) + self.properties["mu"]
+                (self.properties["tau0"] / shear_rate) + self.properties["mu"]
             )
-            condition = (shear_rate[0, 0] * shear_rate[0, 0]) > (
+            condition = (shear_rate * shear_rate) > (
                 self.properties["critical_shear_rate"]
                 * self.properties["critical_shear_rate"]
             )
